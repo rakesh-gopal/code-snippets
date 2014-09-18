@@ -1,0 +1,40 @@
+#!/bin/bash 
+
+local_actproxy_dir="/home/rakesh/mac/git/android/actproxy/client/Android/DashLibrary/obj/local/armeabi-v7a/";
+
+time_now=$(date +"%F_%T");
+
+if (( $# == 0 )); then
+    echo "Usage: proc_minidump <dump_file> [<product> <version_num>] [<disable_v7a>]";
+    exit 1;
+fi
+
+if (( $# == 1 )); then
+    is_remote_build=false;
+else
+    is_remote_build=true;
+    product=$2;
+    build_num=$3;
+    if (( $# == 4 )); then
+        is_arm_v7=false;
+        arch="armeabi";
+    else
+        is_arm_v7=true;
+        arch="armeabi-v7a";
+    fi;
+
+    remote_actproxy_dir="/private/android_libs_backup/$product/master/$build_num/$arch/"
+
+    mkdir -p "stack-traces/$product/$1";
+    so_dir="remote/$product/$build_num/$arch/";
+fi
+
+stack_trace_fpath="stack-traces/$product/$1/$time_now.txt";
+
+echo "Running minidump_stackwalk...";
+minidump_stackwalk $1 symbols > "$stack_trace_fpath" 2>/dev/null;
+echo -e "Stack-trace saved to" "\e[7;94m$stack_trace_fpath\e[m";
+
+echo "Opening the stack-trace...";
+vi "$stack_trace_fpath";
+

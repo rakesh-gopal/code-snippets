@@ -1,0 +1,119 @@
+#!/bin/bash 
+
+local_actproxy_dir="/home/rakesh/mac/git/android/actproxy/client/Android/DashLibrary/obj/local/armeabi-v7a/";
+
+time_now=$(date +"%F_%T");
+
+dump_file="$1";
+arch=""
+product="";
+build_num="";
+remote_actproxy_dir="";
+so_dir="";
+
+init_remote_dir(){
+    build_home="/private/android_libs_backup/$product/master/$build_num/";
+    echo "Looking for builds on the remote server...";
+    builds_list=$(ssh -p 2222 actmobile@jenkins.actmobile.com "ls $build_home");
+    builds_count=$(echo "$builds_list" | wc -l);
+    
+    if (( "$builds_count" > 1 )); then
+        echo;
+        echo "$product $build_num has $builds_count builds, on the following time-stamps:";
+        i=1;
+        while read -r build_ver ; do
+            echo "($i) $build_ver";
+            (( i++ ));
+        done <<< "$builds_list";
+        
+        echo ;
+        echo "Please select a build to use."
+        read -p "Enter 1~$builds_count [default $builds_count] : " use_build;
+
+        if (( $use_build )) && (( "$use_build" > 0 && "$use_build" <= "$builds_count" )); then
+            sel_build_dir=$(sed -n "${use_build}p" <<< "$builds_list");
+            echo "You chose ($use_build) $sel_build_dir.";
+        else
+            sel_build_dir=$(sed -n "${builds_count}p" <<< "$builds_list");
+            echo "Invalid choice $use_build. Using default ($builds_count) $sel_build_dir.";
+        fi;
+
+    else
+        sel_build_dir="$builds_list";
+    fi;
+
+    remote_actproxy_dir="/private/android_libs_backup/$product/master/$build_num/$sel_build_dir/$arch/";
+    so_dir="remote/$product/$build_num/$sel_build_dir/$arch/";
+}
+
+
+if (( $# == 0 )); then
+    echo "Usage: proc_minidump <dump_file> [<product> <version_num>] [<disable_v7a>]";
+    exit 1;
+fi
+
+if (( $# == 1 )); then
+    is_remote_build=false;
+else
+    is_remote_build=true;
+    product=$2;
+    build_num=$3;
+    if (( $# == 4 )); then
+        is_arm_v7=false;
+        arch="armeabi";
+    else
+        is_arm_v7=true;
+        arch="armeabi-v7a";
+    fi;
+
+    init_remote_dir;
+
+    mkdir -p "stack-traces/$product/$dump_file";
+fi
+
+if $is_remote_build; then
+    if [ -f "$so_dir/libwproxy.so" ]; then
+        echo "The .so files already exist. Won't download them...";
+    else
+        echo "Downloading the .so files...";
+        mkdir -p "$so_dir";
+        scp -P 2222 actmobile@jenkins.actmobile.com:$remote_actproxy_dir/* $so_dir;
+        if (( $? != 0 )); then
+            exit 4;
+        fi
+    fi
+else
+    echo "Copying the .so files...";
+    so_dir=".";
+    cp "$local_actproxy_dir/libwproxy.so" .;
+    cp "$local_actproxy_dir/libnative.so" .;
+fi
+
+echo "running dump_syms...";
+dump_syms "$so_dir/libwproxy.so" > "$so_dir/libwproxy.so.sym";
+dump_syms "$so_dir/libnative.so" > "$so_dir/libnative.so.sym";
+
+#echo "Cleaning .so files...";
+#rm libwproxy.so;
+#rm libnative.so;
+
+libwproxy_id=$(head -n1 "$so_dir/libwproxy.so.sym" | cut -d' ' -f4);
+libnative_id=$(head -n1 "$so_dir/libnative.so.sym" | cut -d' ' -f4);
+echo -e "libwproxy.so.sym ID is \e[7;90m$libwproxy_id\e[m";
+
+echo "Copying symbols to the symbols dir...";
+mkdir -p "symbols/libwproxy.so/$libwproxy_id";
+mkdir -p "symbols/libnative.so/$libnative_id";
+
+mv "$so_dir/libwproxy.so.sym" "symbols/libwproxy.so/$libwproxy_id";
+mv "$so_dir/libnative.so.sym" "symbols/libnative.so/$libnative_id";
+
+stack_trace_fpath="stack-traces/$product/$dump_file/$time_now.txt";
+
+echo "Running minidump_stackwalk...";
+minidump_stackwalk $dump_file symbols > "$stack_trace_fpath" 2>/dev/null;
+echo -e "Stack-trace saved to" "\e[7;94m$stack_trace_fpath\e[m";
+
+echo "Opening the stack-trace...";
+vi "$stack_trace_fpath";
+
